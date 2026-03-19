@@ -61,6 +61,20 @@ public sealed class AuthService(
         return new SessionResponse(accessToken.Token, refresh.RawToken, accessToken.ExpiresUtc, BuildProfile(user));
     }
 
+    public async Task<UserProfile> UnlockWithMpinAsync(Guid userId, UnlockMpinRequest request, CancellationToken cancellationToken)
+    {
+        var user = await dbContext.MerchantUsers
+            .Include(candidate => candidate.MerchantProfile)
+            .FirstOrDefaultAsync(candidate => candidate.Id == userId && candidate.IsActive, cancellationToken);
+
+        if (user is null || !passwordHasher.Verify(request.Mpin, user.MpinHash))
+        {
+            throw new UnauthorizedAccessException("Invalid MPIN.");
+        }
+
+        return BuildProfile(user);
+    }
+
     public async Task<SessionResponse> RefreshAsync(RefreshRequest request, CancellationToken cancellationToken)
     {
         var suppliedHash = protector.ComputeBlindIndex(request.RefreshToken);
@@ -114,14 +128,93 @@ public sealed class AuthService(
         return BuildProfile(user);
     }
 
+    public async Task<UserProfile> UpdateProfileAsync(Guid userId, UpdateProfileRequest request, CancellationToken cancellationToken)
+    {
+        var displayName = request.DisplayName.Trim();
+        var email = request.Email.Trim();
+        var phone = NormalizeDigits(request.Phone);
+
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            throw new InvalidOperationException("Full name is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
+        {
+            throw new InvalidOperationException("A valid email address is required.");
+        }
+
+        if (phone.Length != 10)
+        {
+            throw new InvalidOperationException("Phone number must contain exactly 10 digits.");
+        }
+
+        var user = await dbContext.MerchantUsers
+            .Include(candidate => candidate.MerchantProfile)
+            .FirstOrDefaultAsync(candidate => candidate.Id == userId && candidate.IsActive, cancellationToken)
+            ?? throw new UnauthorizedAccessException("User not found.");
+
+        var phoneBlindIndex = protector.ComputeBlindIndex(phone);
+        var emailBlindIndex = protector.ComputeBlindIndex(email.Trim().ToLowerInvariant());
+
+        var phoneInUse = await dbContext.MerchantUsers
+            .AnyAsync(candidate => candidate.Id != userId && candidate.PhoneBlindIndex == phoneBlindIndex, cancellationToken);
+
+        if (phoneInUse)
+        {
+            throw new InvalidOperationException("That phone number is already in use.");
+        }
+
+        var emailInUse = await dbContext.MerchantUsers
+            .AnyAsync(candidate => candidate.Id != userId && candidate.EmailBlindIndex == emailBlindIndex, cancellationToken);
+
+        if (emailInUse)
+        {
+            throw new InvalidOperationException("That email address is already in use.");
+        }
+
+        user.DisplayNameCiphertext = protector.Encrypt(displayName);
+        user.EmailCiphertext = protector.Encrypt(email);
+        user.EmailBlindIndex = emailBlindIndex;
+        user.PhoneCiphertext = protector.Encrypt(phone);
+        user.PhoneBlindIndex = phoneBlindIndex;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return BuildProfile(user);
+    }
+
+    public async Task UpdateMpinAsync(Guid userId, UpdateMpinRequest request, CancellationToken cancellationToken)
+    {
+        if (request.NewMpin != request.ConfirmMpin)
+        {
+            throw new InvalidOperationException("New MPIN and confirmation do not match.");
+        }
+
+        if (request.NewMpin.Length != 6 || request.NewMpin.Any(ch => !char.IsDigit(ch)))
+        {
+            throw new InvalidOperationException("New MPIN must contain exactly 6 digits.");
+        }
+
+        var user = await dbContext.MerchantUsers.FirstOrDefaultAsync(candidate => candidate.Id == userId && candidate.IsActive, cancellationToken)
+            ?? throw new UnauthorizedAccessException("User not found.");
+
+        if (!passwordHasher.Verify(request.OldMpin, user.MpinHash))
+        {
+            throw new UnauthorizedAccessException("Current MPIN is invalid.");
+        }
+
+        user.MpinHash = passwordHasher.Hash(request.NewMpin);
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     private UserProfile BuildProfile(MerchantUser user) => new(
         user.Id.ToString(),
         user.TenantId.ToString(),
         user.MerchantProfile.MerchantCode,
         user.Role.ToString(),
         protector.Decrypt(user.DisplayNameCiphertext),
-        Masking.Phone(protector.Decrypt(user.PhoneCiphertext)),
-        Masking.Email(protector.Decrypt(user.EmailCiphertext)));
+        protector.Decrypt(user.PhoneCiphertext),
+        protector.Decrypt(user.EmailCiphertext));
 
     private static string NormalizeDigits(string value) => new(value.Where(char.IsDigit).ToArray());
 }
