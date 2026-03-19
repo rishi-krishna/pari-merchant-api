@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MySqlConnector;
 using PaRiMerchant.Application.Abstractions;
 using PaRiMerchant.Application.Payments;
 using PaRiMerchant.Infrastructure.Persistence;
@@ -20,6 +21,19 @@ public static class DependencyInjection
 
         var connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
+        var environmentName = configuration["ASPNETCORE_ENVIRONMENT"] ?? configuration["DOTNET_ENVIRONMENT"];
+        if (string.Equals(environmentName, "Production", StringComparison.OrdinalIgnoreCase))
+        {
+            var connectionBuilder = new MySqlConnectionStringBuilder(connectionString);
+            if (string.IsNullOrWhiteSpace(connectionBuilder.Server) ||
+                connectionBuilder.Server.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                connectionBuilder.Server.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Production is using a localhost MySQL connection. Set Render env var " +
+                    "'ConnectionStrings__DefaultConnection' to your cloud MySQL connection string.");
+            }
+        }
 
         services.AddDbContext<AppDbContext>(options =>
             // Pin the provider version so cloud startup/login doesn't depend on an
