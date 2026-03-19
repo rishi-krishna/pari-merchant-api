@@ -13,6 +13,7 @@ using PaRiMerchant.Infrastructure.Seeding;
 using PaRiMerchant.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);

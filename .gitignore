@@ -4,6 +4,8 @@ obj/
 .idea/
 TestResults/
 storage/
+!src/PaRiMerchant.Infrastructure/Storage/
+!src/PaRiMerchant.Infrastructure/Storage/*.cs
 *.user
 *.suo
 *.log
