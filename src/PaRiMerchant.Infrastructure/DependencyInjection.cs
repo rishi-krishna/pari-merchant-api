@@ -22,7 +22,9 @@ public static class DependencyInjection
             ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
 
         services.AddDbContext<AppDbContext>(options =>
-            options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+            // Pin the provider version so cloud startup/login doesn't depend on an
+            // extra AutoDetect connection round-trip before EF can build the context.
+            options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 45))));
 
         services.AddScoped<IAppDbContext>(provider => provider.GetRequiredService<AppDbContext>());
         services.AddScoped<ISensitiveDataProtector, AesGcmSensitiveDataProtector>();
