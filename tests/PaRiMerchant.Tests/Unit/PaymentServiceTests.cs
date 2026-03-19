@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using PaRiMerchant.Application.Abstractions;
 using PaRiMerchant.Application.Payments;
 using PaRiMerchant.Domain.Entities;
@@ -21,7 +22,7 @@ public sealed class PaymentServiceTests
         dbContext.Beneficiaries.Add(beneficiary);
         await dbContext.SaveChangesAsync();
 
-        var service = new PaymentService(dbContext, new FakeProtector());
+        var service = new PaymentService(dbContext, new FakeProtector(), Options.Create(new CashfreeOptions()));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.CreatePayoutAsync(tenantId, new CreatePayoutRequest(beneficiary.Id.ToString(), 100m, "INR", "Test payout"), CancellationToken.None));
@@ -38,7 +39,7 @@ public sealed class PaymentServiceTests
         dbContext.Beneficiaries.Add(beneficiary);
         await dbContext.SaveChangesAsync();
 
-        var service = new PaymentService(dbContext, new FakeProtector());
+        var service = new PaymentService(dbContext, new FakeProtector(), Options.Create(new CashfreeOptions()));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.CreatePayoutAsync(tenantId, new CreatePayoutRequest(beneficiary.Id.ToString(), 100m, "INR", "Test payout"), CancellationToken.None));

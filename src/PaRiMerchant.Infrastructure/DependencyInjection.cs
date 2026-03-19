@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PaRiMerchant.Application.Abstractions;
+using PaRiMerchant.Application.Payments;
 using PaRiMerchant.Infrastructure.Persistence;
 using PaRiMerchant.Infrastructure.Security;
 using PaRiMerchant.Infrastructure.Seeding;
@@ -15,6 +16,7 @@ public static class DependencyInjection
     {
         services.Configure<SecurityOptions>(configuration.GetSection(SecurityOptions.SectionName));
         services.Configure<StorageOptions>(configuration.GetSection(StorageOptions.SectionName));
+        services.Configure<CashfreeOptions>(configuration.GetSection(CashfreeOptions.SectionName));
 
         var connectionString = configuration.GetConnectionString("DefaultConnection")
             ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is required.");
