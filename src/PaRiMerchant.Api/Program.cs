@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -20,13 +21,29 @@ builder.Services.AddHttpClient();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+var allowedOrigins = (builder.Configuration["Cors:AllowedOrigins"] ?? "http://localhost:4200;http://127.0.0.1:4200")
+    .Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("frontend", policy =>
-        policy
-            .WithOrigins("http://localhost:4200", "http://127.0.0.1:4200")
-            .AllowAnyHeader()
-            .AllowAnyMethod());
+    {
+        if (allowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(allowedOrigins);
+        }
+        else
+        {
+            policy.AllowAnyOrigin();
+        }
+
+        policy.AllowAnyHeader().AllowAnyMethod();
+    });
+});
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 
 builder.Services.AddRateLimiter(options =>
@@ -68,6 +85,7 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+app.UseForwardedHeaders();
 app.UseHttpsRedirection();
 app.UseCors("frontend");
 app.UseRateLimiter();
@@ -86,5 +104,6 @@ if (app.Environment.IsDevelopment())
     await seeder.SeedAsync();
 }
 
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapControllers().RequireRateLimiting("api");
 app.Run();

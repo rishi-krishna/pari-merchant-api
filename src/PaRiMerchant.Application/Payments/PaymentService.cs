@@ -79,6 +79,16 @@ public sealed class PaymentService(
 
         using var response = await SendCashfreeAsync(HttpMethod.Post, "orders", payload, cancellationToken);
         var providerOrder = await ParseCashfreeOrderResponseAsync(response, cancellationToken);
+        await SavePendingCashfreeCheckoutTransactionAsync(
+            tenantId,
+            contact,
+            request.Amount,
+            currency,
+            orderId,
+            localReference,
+            providerOrder.CfOrderId,
+            customerName,
+            cancellationToken);
         return new CashfreeCheckoutOrderResponse(providerOrder.OrderId, providerOrder.CfOrderId, providerOrder.PaymentSessionId, localReference);
     }
 
@@ -186,6 +196,7 @@ public sealed class PaymentService(
                 return;
             case "PAYMENT_FAILED_WEBHOOK":
             case "PAYMENT_USER_DROPPED_WEBHOOK":
+                await ProcessCashfreeTerminalWebhookAsync(root, request.RawBody, cancellationToken);
                 return;
             case "PAYMENT_FORM_ORDER_WEBHOOK":
                 await ProcessCashfreeFormWebhookAsync(root, request.RawBody, cancellationToken);
@@ -548,6 +559,160 @@ public sealed class PaymentService(
         {
             dbContext.Transactions.Add(transaction);
         }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task SavePendingCashfreeCheckoutTransactionAsync(
+        Guid tenantId,
+        Contact contact,
+        decimal amount,
+        string currency,
+        string orderId,
+        string localReference,
+        string cfOrderId,
+        string customerName,
+        CancellationToken cancellationToken)
+    {
+        var fee = Math.Round(amount * 0.025m, 2);
+        var transaction = await dbContext.Transactions
+            .Include(item => item.CardCollection)
+            .Include(item => item.Events)
+            .FirstOrDefaultAsync(
+                item => item.TenantId == tenantId
+                    && item.TransactionType == TransactionType.CardCollection
+                    && item.ProviderReference == orderId,
+                cancellationToken);
+
+        if (transaction is null)
+        {
+            transaction = BuildBaseTransaction(
+                tenantId,
+                TransactionType.CardCollection,
+                amount,
+                fee,
+                currency,
+                BuildCheckoutDescription("hosted_checkout", customerName));
+
+            transaction.ContactId = contact.Id;
+            transaction.ExternalReference = localReference;
+            transaction.ProviderReference = orderId;
+            transaction.Status = TransactionStatus.PendingProvider;
+            transaction.SettlementStatus = "AwaitingProvider";
+            transaction.CardCollection = new CardCollectionDetail
+            {
+                TransactionId = transaction.Id,
+                CardBrand = "Cashfree Hosted Checkout",
+                MaskedCardNumber = string.Empty,
+                ProviderTokenReference = string.Empty,
+                CustomerNameCiphertext = protector.Encrypt(customerName)
+            };
+
+            transaction.Events.Add(BuildEvent(
+                transaction,
+                "cashfree_order_created",
+                transaction.Status,
+                $"Cashfree checkout order created. OrderId={orderId}, CfOrderId={cfOrderId}, ContactId={contact.Id}, Awaiting provider confirmation."));
+
+            dbContext.Transactions.Add(transaction);
+        }
+        else
+        {
+            transaction.ContactId = contact.Id;
+            transaction.Amount = amount;
+            transaction.FeeAmount = fee;
+            transaction.NetAmount = amount - fee;
+            transaction.Currency = currency;
+            transaction.ExternalReference = string.IsNullOrWhiteSpace(transaction.ExternalReference) ? localReference : transaction.ExternalReference;
+            transaction.ProviderReference = orderId;
+            transaction.Status = TransactionStatus.PendingProvider;
+            transaction.SettlementStatus = "AwaitingProvider";
+            transaction.Description = BuildCheckoutDescription("hosted_checkout", customerName);
+            transaction.CardCollection ??= new CardCollectionDetail
+            {
+                TransactionId = transaction.Id
+            };
+            transaction.CardCollection.CardBrand = "Cashfree Hosted Checkout";
+            transaction.CardCollection.CustomerNameCiphertext = protector.Encrypt(customerName);
+            transaction.Events.Add(BuildEvent(
+                transaction,
+                "cashfree_order_refreshed",
+                transaction.Status,
+                $"Cashfree checkout order refreshed locally. OrderId={orderId}, CfOrderId={cfOrderId}."));
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task ProcessCashfreeTerminalWebhookAsync(JsonElement root, string rawBody, CancellationToken cancellationToken)
+    {
+        if (!root.TryGetProperty("data", out var data))
+        {
+            return;
+        }
+
+        var payment = data.TryGetProperty("payment", out var paymentElement) ? paymentElement : default;
+        var order = data.TryGetProperty("order", out var orderElement) ? orderElement : default;
+
+        var orderId = GetString(order, "order_id");
+        if (string.IsNullOrWhiteSpace(orderId))
+        {
+            return;
+        }
+
+        var customerDetails = order.TryGetProperty("customer_details", out var customerDetailsElement)
+            ? customerDetailsElement
+            : default;
+        var orderStatus = GetString(order, "order_status", GetString(payment, "payment_status", "FAILED"));
+        var customerPhone = NormalizeDigits(GetString(customerDetails, "customer_phone"));
+        var customerEmail = GetString(customerDetails, "customer_email");
+        var customerName = GetString(customerDetails, "customer_name");
+        var paymentMessage = GetString(payment, "payment_message");
+        var cfPaymentId = GetString(payment, "cf_payment_id");
+        var paymentGroup = GetString(payment, "payment_group");
+
+        var transaction = await dbContext.Transactions
+            .Include(item => item.CardCollection)
+            .Include(item => item.Events)
+            .Include(item => item.LedgerEntries)
+            .FirstOrDefaultAsync(
+                item => item.TransactionType == TransactionType.CardCollection
+                    && item.ProviderReference == orderId,
+                cancellationToken);
+
+        if (transaction is null)
+        {
+            return;
+        }
+
+        var normalizedStatus = MapCashfreeStatus(orderStatus);
+        transaction.Status = normalizedStatus == TransactionStatus.Succeeded ? TransactionStatus.PendingProvider : normalizedStatus;
+        transaction.SettlementStatus = MapSettlementStatus(orderStatus);
+        transaction.FailureCode = normalizedStatus == TransactionStatus.Failed ? orderStatus : string.Empty;
+        if (!string.IsNullOrWhiteSpace(customerName))
+        {
+            transaction.Description = BuildCheckoutDescription(paymentGroup, customerName);
+        }
+
+        transaction.CardCollection ??= new CardCollectionDetail
+        {
+            TransactionId = transaction.Id
+        };
+        transaction.CardCollection.CardBrand = "Cashfree Hosted Checkout";
+        transaction.CardCollection.ProviderTokenReference = string.IsNullOrWhiteSpace(cfPaymentId)
+            ? transaction.CardCollection.ProviderTokenReference
+            : cfPaymentId;
+        if (!string.IsNullOrWhiteSpace(customerName))
+        {
+            transaction.CardCollection.CustomerNameCiphertext = protector.Encrypt(customerName);
+        }
+
+        transaction.Events.Add(BuildEvent(
+            transaction,
+            "cashfree_payment_terminal_webhook",
+            transaction.Status,
+            $"Cashfree checkout terminal webhook received. Status={orderStatus}, OrderId={orderId}, CfPaymentId={cfPaymentId}, ContactMatched={(transaction.ContactId.HasValue ? "yes" : "no")}, Email={customerEmail}, Phone={customerPhone}, Message={paymentMessage}",
+            rawBody));
 
         await dbContext.SaveChangesAsync(cancellationToken);
     }

@@ -8,3 +8,4 @@ storage/
 *.suo
 *.log
 appsettings.Local.json
+.publish-test/
