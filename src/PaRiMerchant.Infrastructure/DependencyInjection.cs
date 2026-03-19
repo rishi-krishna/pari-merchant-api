@@ -24,7 +24,10 @@ public static class DependencyInjection
         services.AddDbContext<AppDbContext>(options =>
             // Pin the provider version so cloud startup/login doesn't depend on an
             // extra AutoDetect connection round-trip before EF can build the context.
-            options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 45))));
+            options.UseMySql(
+                connectionString,
+                new MySqlServerVersion(new Version(8, 0, 45)),
+                mySqlOptions => mySqlOptions.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null)));
 
         services.AddScoped<IAppDbContext>(provider => provider.GetRequiredService<AppDbContext>());
         services.AddScoped<ISensitiveDataProtector, AesGcmSensitiveDataProtector>();
