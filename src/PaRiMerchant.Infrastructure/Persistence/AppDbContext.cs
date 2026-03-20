@@ -23,6 +23,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureEnums(modelBuilder);
+        ConfigureTableNames(modelBuilder);
 
         modelBuilder.Entity<Tenant>().HasIndex(item => item.Code).IsUnique();
         modelBuilder.Entity<MerchantProfile>().HasIndex(item => item.MerchantCode).IsUnique();
@@ -70,6 +71,25 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             .OnDelete(DeleteBehavior.Restrict);
 
         base.OnModelCreating(modelBuilder);
+    }
+
+    private static void ConfigureTableNames(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Tenant>().ToTable("tenants");
+        modelBuilder.Entity<MerchantProfile>().ToTable("merchantprofiles");
+        modelBuilder.Entity<MerchantUser>().ToTable("merchantusers");
+        modelBuilder.Entity<RefreshSession>().ToTable("refreshsessions");
+        modelBuilder.Entity<Contact>().ToTable("contacts");
+        modelBuilder.Entity<Beneficiary>().ToTable("beneficiaries");
+        modelBuilder.Entity<KycProfile>().ToTable("kycprofiles");
+        modelBuilder.Entity<KycDocument>().ToTable("kycdocuments");
+        modelBuilder.Entity<Transaction>().ToTable("transactions");
+        modelBuilder.Entity<TransactionEvent>().ToTable("transactionevents");
+        modelBuilder.Entity<LedgerEntry>().ToTable("ledgerentries");
+        modelBuilder.Entity<AuditEvent>().ToTable("auditevents");
+        modelBuilder.Entity<CardCollectionDetail>().ToTable("cardcollectiondetail");
+        modelBuilder.Entity<WalletTopupDetail>().ToTable("wallettopupdetail");
+        modelBuilder.Entity<PayoutDetail>().ToTable("payoutdetail");
     }
 
     private static void ConfigureEnums(ModelBuilder modelBuilder)
